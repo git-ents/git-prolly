@@ -1,0 +1,14 @@
+= 🪵 `git-prolly`
+:abstract: Operation logs in pure git.
+
+== Motivation
+
+// TODO
+
+== Installation
+
+// TODO
+
+== Usage
+
+// TODO
