@@ -1,3 +1,436 @@
-= TODO
+= Specification for `git-store`
+Joey Carpinelli <joseph.carpinelli@icloud.com>
 
-TODO
+[abstract]
+****
+`git-store` is the repository-plumbing layer built on
+https://github.com/git-ents/facet-git-tree[`facet-git-tree`]. It composes
+`facet-git-tree`'s encoded Git objects into bound documents, published schemas,
+refs, commits, tombstones, and content-derived entity identities.
+
+The value and tree encoding itself — the leaves, containers, escaping,
+ordinals, the `Node`/`Schema` vocabulary, the `.schema` envelope entry, and the
+decode contract — is defined by `facet-git-tree`'s `docs/format.adoc`. That
+document is *normative* for this one: where the two disagree about that
+encoding, `format.adoc` wins, and any disagreement here is a defect in this
+document.
+
+This document specifies only the `git-store` layer layered over that encoding:
+the document envelope, schema publication, refs, commits, tombstones, and
+entity identity.
+****
+
+[NOTE]
+====
+The earlier `git-store` layout is *gone*. A bound document no longer carries a
+`schema/` entry and a `value/` entry side by side, and there is no longer a
+`{schema/, value/}` frame anywhere. A document now names the value's own
+entries directly at its root, beside a single reserved `.schema` entry
+(link:#envelope). Any prose, code, fixture, or ref convention that still speaks
+of `{schema/, value/}` trees describes the removed layout and contradicts this
+document.
+====
+
+== Requirements
+
+The following requirements define the expected behavior of the `git-store`
+layer. Normative statements about the value and tree encoding are deferred to
+`facet-git-tree`'s `docs/format.adoc`.
+
+[CAUTION]
+====
+This set of requirements is not yet stable, and will grow (and change) over time.
+====
+
+=== Compatibility
+
+[role="requirement", id="compatibility.facet"]
+.Compatibility with the Facet Ecosystem
+--
+The `facet-git-tree` crate MUST satisfy all requirements of general `facet` adapter crates.
+--
+
+[role="requirement", id="compatibility.update"]
+.Compatibility with Prior Releases
+--
+The `facet-git-tree` crate MUST strictly adhere to semantic versioning.
+--
+
+[role="requirement", id="compatibility.git"]
+.Compatibility with Git
+--
+The `facet-git-tree` crate MUST be compatible with Git's v2 object format.
+--
+
+[role="requirement", id="compatibility.git.hash"]
+.Object Identity Hash
+--
+Object identities MUST be computed over Git's canonical object encoding under
+*either* of Git's repository object formats: 20-byte SHA-1 (Git's default,
+non-`objectFormat` repository) or 32-byte SHA-256.
+
+An object id is meaningful only within the format that produced it: two ids are
+comparable only when both come from the same object format, and cross-format
+comparison MUST compare the underlying objects' content rather than their ids.
+--
+
+=== Document Envelope
+
+[role="requirement", id="envelope"]
+.Document Envelope
+--
+A bound document is a Git tree whose entries are the entries of the value's own
+bare encoding, plus a single reserved entry named `.schema`:
+
+[source]
+----
+{ <value's own entries>..., .schema -> <unbound schema> }
+----
+
+Because the document's schema root resolves to a struct
+(link:#envelope.schema-root[document schema root]), the value's fields sit
+directly at the root: there is no `value/` subtree and no `schema/` subtree and
+no wrapper around the value. `.value` is reserved by the encoding and is never
+written — there is no `.value` entry in a document.
+
+`.schema` MUST be found by *name*, never by position: the entry sorts wherever
+its byte order places it among the value's own entries, and no implementation
+may rely on where it appears. `.schema` MUST hold an *unbound* `Schema` value —
+a `Schema` with no nested `.schema` of its own
+(link:#schema.representation[schema representation]).
+
+The reserved name is meaningful only at the root. A struct field genuinely
+named `.schema` is escaped by the encoding (to `%.schema`) and can never
+collide with the envelope entry; a `.schema` entry appearing below the root is
+an error.
+--
+
+[role="requirement", id="envelope.schema-root"]
+.Document Schema Root
+--
+A document's schema root MUST resolve — following `ref` nodes through the
+document's `defs` — to a `struct` node. A schema whose resolved root is any
+other node — a scalar or `unit`, a sequence (`list`/`array`/`tuple`), a `map`,
+an `optional`, an `enum`, or an opaque leaf such as `cbor`, `rawtree`, or
+`dynamic` — describes a bare value, not a document, and MUST be refused as a
+document root. There is no wrapper variant that would let such a value become a
+document; a top-level scalar or sequence is stored inside a struct field.
+--
+
+[role="requirement", id="envelope.empty"]
+.Empty Struct Document
+--
+An empty struct's document is `{ none -> <empty blob>, .schema -> <schema tree> }`:
+the value contributes the encoding's `none` presence marker, and the `.schema`
+entry sits beside it. No empty tree is ever written; the marker and its target
+are defined by `facet-git-tree`'s `docs/format.adoc`.
+--
+
+=== Schemas
+
+[role="requirement", id="schema.representation"]
+.Schema Representation
+--
+`Node` and `Schema` MUST be ordinary `Facet` values, self-hosted: a schema
+document is stored as a Git tree via this crate's own encoding, with no
+special-cased representation.
+
+Their on-disk form is a public contract: any change to the encoded shape of the
+schema types is a breaking change and MUST be released as a semver-major
+version, per link:#compatibility.update[compatibility with prior releases].
+
+A schema document also carries its embedded `kind` name. The name is part of
+the schema document and is validated as a Git ref-name segment; it MUST NOT be
+inferred from a publication ref. A publication ref is an authoring/history
+index, not the type definition of an existing bound data document.
+
+The schema types are defined as follows.
+
+[source,rust]
+----
+pub struct Schema {
+    pub kind: String,                 // opaque entity-kind label, e.g. "Book"
+    pub root: Node,
+    pub defs: BTreeMap<String, Node>, // named types, keyed by Node::Ref name
+}
+
+#[repr(u8)]
+pub enum Node {
+    Unit, Bool, Char, String,
+    I8, I16, I32, I64, I128, ISize,
+    U8, U16, U32, U64, U128, USize,
+    F32, F64,
+    Bytes,
+    Cbor,      // opaque canonical-CBOR payload
+    RawTree,   // verbatim subtree reference
+    Dynamic,   // runtime-shaped value
+
+    List(Box<Node>),
+    Array { elem: Box<Node>, len: usize },
+    Map { key: Box<Node>, value: Box<Node> },   // key MUST be String
+    Optional(Box<Node>),
+    Tuple(Vec<Node>),
+    Struct(BTreeMap<String, Node>),
+    Enum(BTreeMap<String, VariantKind>),
+    Ref(String),
+}
+
+#[repr(u8)]
+pub enum VariantKind {
+    Unit,
+    Tuple(Vec<Node>),
+    Struct(BTreeMap<String, Node>),
+}
+----
+
+A `Node` leaf variant is a bare blob holding its keyword (`unit`, `bool`,
+`char`, `string`, `i8` … `u128`, `isize`, `usize`, `f32`, `f64`, `bytes`,
+`cbor`, `rawtree`, `dynamic`); a composite variant is a single-entry tree
+`{ keyword -> payload }` (`list`, `array`, `map`, `optional`, `tuple`,
+`struct`, `enum`, `ref`). Node tags are exactly the *lowercase* variant names.
+
+* `Node::Struct` maps *field name -> `Node`* directly. There is no
+  `StructField` wrapper, no `has_default` flag, and no `newtype` variant: a
+  one-field tuple variant is `Tuple([n])`.
+* `cbor`, `rawtree`, and `dynamic` are node kinds. `cbor` is an opaque
+  canonical-CBOR payload; `rawtree` points at an existing tree oid without
+  re-encoding it (an opaque, arbitrarily-shaped subtree exempt from the
+  no-empty-tree and mode rules); `dynamic` is a value shaped at runtime.
+* `Map.key` MUST be `String`. A schema whose `Map.key` node is anything else is
+  rejected; non-string-keyed data is modeled as `cbor`.
+* Named types are `ref` nodes into the document's `defs` table. A `ref` whose
+  target is absent is *dangling* and MUST be rejected; a cycle of refs not
+  guarded by `Optional`/`List`/`Array`/`Map`/`Enum` is *non-productive* and MUST
+  be rejected.
+* Every struct field is always emitted. On read, a missing field is an error
+  and an unknown entry is an error. The format therefore has no optional or
+  defaulted fields at the schema level; emptiness is expressed only by
+  `Optional` and by the encoding's containers.
+
+A struct node's fields and an enum node's variants MUST be keyed by name, so the
+name IS the tree entry name — no ordinal indirection: the schema types are
+ordinary `Facet` values walked by the same generic encoding, which is what this
+requirement's self-hosting claim already demands.
+
+Field and variant declaration order is consequently NOT recorded and MUST NOT
+be relied upon. It is not load-bearing anywhere in the encoding — struct values
+encode name-keyed and enum variants tag by name — so nothing a reader does
+depends on it.
+
+A field or variant name MUST be a legal tree entry name under the encoding's
+escaping rules, and MUST be rejected otherwise.
+
+A schema tree therefore reads like a type declaration. `git ls-tree -r` of a
+published `Issue` schema — here `id: String`, `labels: List(String)`, and
+`parent: Optional(Issue)`, with `root` a `ref` to the `Issue` definition —
+shows (trimmed to the relevant entries):
+
+[source]
+----
+kind                                  -> "Issue\n"
+root/ref                              -> "Issue\n"
+defs/Issue/struct/id                  -> "string\n"
+defs/Issue/struct/labels/list         -> "string\n"
+defs/Issue/struct/parent/optional/ref -> "Issue\n"
+----
+--
+
+[NOTE]
+====
+Publishing a schema under a ref — e.g. `refs/schema/issue` — is a convention
+owned by higher layers such as `git-store`; `facet-git-tree` itself remains
+oid-in/oid-out and performs no ref operations. A schema is published by
+serializing its `Schema` through this crate and pointing the ref at the
+resulting tree, or at a commit wrapping that tree for history and signing — the
+higher layer's choice. Published schema trees are the bare `Schema` value
+(entries `kind`, `root`, `defs`); a schema embedded as a document's `.schema`
+entry is the same unbound value.
+====
+
+=== Value and Tree Encoding
+
+[role="requirement", id="encoding.summary"]
+.Encoding Summary (normative: `facet-git-tree` `docs/format.adoc`)
+--
+The value and tree encoding is not redefined here; it is specified by
+`facet-git-tree`'s `docs/format.adoc`, which is normative for this document.
+The following summary is informative and MUST NOT be read as independent of
+that document.
+
+* *Leaves.* A text leaf is its raw representation followed by exactly one
+  trailing `\n` byte, appended unconditionally; on read exactly one trailing
+  `\n` is stripped, and a text leaf whose final byte is not `\n` is malformed.
+  The binary leaves `bytes` and `cbor` carry no trailing byte. Integers are
+  canonical decimal — no `+`, no leading zeros, no `-0`. Floats use the `ryu`
+  crate's shortest round-tripping text; the non-finite values are the fixed
+  lowercase spellings `nan`, `inf`, and `-inf`; zero is written `0.0` and
+  `-0.0` is normalized (and rejected on read). The codec round-trips a value
+  exactly, except for a NaN's payload/sign.
+* *Containers.* Positional entries (tuple fields, tuple-variant fields,
+  sequence elements) are named by fixed-width *lowercase hex* ordinals, width
+  three, `000`–`fff`; every tree is capped at 4096 entries. Larger payloads are
+  modeled as a `cbor` field, never silently repacked.
+* *Markers.* `None`, a dynamic `Null`, an empty collection, an empty struct,
+  and `unit` share one presence marker: the non-empty tree
+  `{ none -> <empty blob> }`. `Some(x)` is `{ some -> x }`. `none` and `some`
+  are reserved structural names. No empty tree is ever written anywhere (except
+  inside a `rawtree`), and the empty blob is always written explicitly.
+* *Names.* A user name is stored verbatim only when it is non-empty, every byte
+  is in `[A-Za-z0-9._-]`, its first byte is neither `.` nor `%`, and it is not
+  literally `none` or `some`; otherwise it is `%` followed by uppercase-hex
+  percent-encoding. A name's *encoded* length MUST NOT exceed 255 bytes.
+* *Decode.* A reader is strict: it rejects unknown structural keywords,
+  malformed or non-canonical escapes, wrong-width/uppercase/gapped/duplicate
+  ordinals, object-kind or mode mismatches, unsorted or duplicate entries, and
+  non-canonical leaves. Invariant: for every accepted tree `t`,
+  `encode(decode(t)) == t`. Limits, counted on the encoded tree: max name
+  length 255 bytes, max nesting depth 32, and max `2^20` (1048576) node visits
+  per decode, counting visits rather than unique oids.
+* *Object formats.* The codec supports both Git object formats, SHA-1 and
+  SHA-256 (link:#compatibility.git.hash[object identity hash]), with oids
+  comparable only within one format.
+--
+
+=== `git-store` Plumbing Boundary
+
+The serialization layer is intentionally separate from the repository plumbing
+layer. `facet-git-tree` remains oid-in/oid-out; `git-store` and
+`git-database` compose those objects with schemas, documents, refs, commits,
+and indexes.
+
+[role="requirement", id="plumbing.schema.explicit"]
+.Explicit Schema Selection
+--
+The unbound value operations MUST accept an explicit schema tree or a Git
+revision that resolves to one. The CLI spellings are
+`git store value encode --schema <schema-tree-or-commit>` and
+`git store value decode <value-tree> --schema <schema-tree-or-commit>`.
+`git store document bind <value-tree> --schema <schema-tree-or-commit>` MUST
+use that same explicit schema to construct the bound document root.
+
+These operations MUST NOT infer a schema from a kind ref, schema history,
+commit trailers, or a caller-selected entity name. A bound document is the
+value's own entries plus the single reserved `.schema` entry
+(link:#envelope), and the `.schema` subtree MUST be the exact schema used to
+validate the value.
+--
+
+[role="requirement", id="plumbing.schema.history"]
+.Historical Schema Addressing
+--
+`git store schema show <kind> --at <commit>` MUST address the named schema
+publication commit directly. Omitting `--at` selects the current publication.
+Historical inspection MUST report the publication commit OID and the
+schema-tree OID; it MUST NOT replace the historical selection with the current
+schema.
+--
+
+[role="requirement", id="plumbing.identity"]
+.Content-Derived Entity Identity
+--
+The `EntityId` of a bound document MUST be the object ID of its complete bound
+document tree — the tree holding the value's own entries and the reserved
+`.schema` entry (link:#envelope). Both the encoded value and the embedded
+schema therefore contribute to identity, and an implementation MUST make that
+ID available for any document it can compile.
+
+Identity is a derived value, not a ref layout. Ref names under
+`refs/store/<kind>/` are application policy: the store MUST publish an entity
+at whatever name the caller selects and MUST NOT attach meaning to that name.
+An application that wants content-addressed storage MUST be able to select
+`<entity-id>` as the name, and the store MUST treat that name like any other.
+
+The per-kind index is a materialized cache of the entity refs; entity refs
+remain authoritative and a reader MUST be able to fall back when the index is
+missing, malformed, or stale.
+--
+
+[role="requirement", id="identity.commit-trailers"]
+.Advisory Schema Trailers
+--
+A commit wrapping a document MAY carry the advisory trailers `Schema-Version:`
+(the meta-schema major version defined by `facet-git-tree`'s `docs/format.adoc`)
+and `Schema-commit:` (a pointer to a schema publication commit). These trailers
+are advisory only: trailers are not traversed by `gc` or `push`, and the
+normative, reachable schema is always the embedded `.schema` entry. No read may
+require a trailer to resolve a schema, and a reader ignores trailers entirely:
+the legacy names `Schema:` and `Ents-Ref:` are ignored on read exactly as the
+two advisory names are.
+
+The reserved-trailer set (`RESERVED_TRAILERS`) keeps user commits free of all
+four names — the two advisory trailers plus the legacy `Schema:` and
+`Ents-Ref:` — because accepting a legacy name would let a caller make a newly
+written commit look like a schema or provenance binding that the embedded
+`.schema` entry, not a trailer, actually carries. A user-supplied commit message
+MUST NOT contain a line beginning with a reserved trailer name, and a write MUST
+reject such a message rather than emit it.
+--
+
+[role="requirement", id="identity.doctor"]
+.Schema-of-Schemas Fixed Point
+--
+`git store doctor` MUST pin the object id of `S0` — the schema describing
+`Schema` itself, the schema-of-schemas — as a golden constant *per object
+format*, and MUST verify the codec's fixed point for both formats: that the
+compiled-in `S0` decodes and re-encodes to itself at that pinned id, for SHA-1
+and for SHA-256 (link:#compatibility.git.hash[object identity hash]).
+--
+
+[role="requirement", id="plumbing.tombstone"]
+.Typed Entity Deletion
+--
+`git store entity delete <kind> <entity-id>` MUST publish a typed tombstone at
+the entity's canonical ref rather than prune it, so the ref's history stays
+reachable; `git store rm <kind> <name>` does the same after resolving the
+caller-chosen name to its content-derived id. The tombstone MUST use the bound
+document frame (link:#envelope) and carry an explicit deleted state, kind, and
+the `EntityId` the ref addressed when it was deleted. A repeated deletion MUST
+be distinguishable from an absent entity.
+--
+
+[role="requirement", id="plumbing.inspect"]
+.Ref and Object Inspection
+--
+The CLI MUST provide Git-shaped inspection through `ref list`, `ref resolve`,
+`object inspect`, and `object tree`. Ref output MUST use full ref names and
+object output MUST use stable full object IDs. These commands MUST not mutate
+refs or objects.
+--
+
+[role="requirement", id="plumbing.output"]
+.Machine Output and Diagnostics
+--
+Additive plumbing commands MUST support human-readable text and machine-readable
+JSON and NDJSON output through `--format text|json|ndjson`; `--json` MAY be a
+compact-JSON shorthand. Successful records MUST be written to stdout, and
+failure diagnostics MUST be written to stderr. Machine output MUST use stable
+object IDs and full ref names rather than abbreviated display values.
+
+The current CLI exit categories are `1` for other operational errors, `2` for
+invalid arguments or object shape, `3` for missing refs, objects, schemas, or
+entities, `4` for compare-and-swap conflicts, and `5` for schema, value, or
+document failures. A failed command MUST NOT emit a success record.
+--
+
+[role="requirement", id="plumbing.cas"]
+.Explicit Compare-and-Swap Publication
+--
+`git store document publish <kind> <document-tree> --expected <absent|OID>` MUST
+perform a one-shot compare-and-swap. `--alias <name>` selects the ref to
+publish at, defaulting to the document's content-derived name. The expectation
+applies to that ref, and the ref and the materialized per-kind index MUST
+advance in one ref-store batch or neither may advance.
+
+A stale expectation MUST fail with the compare-and-swap exit category and MUST
+NOT be retried by the CLI. Objects written before a lost publication MAY remain
+unreachable. Traversal, batching, retry, resume, and conflict policy belong to
+the calling script or program.
+--
+
+=== Structural Comparison
+
+[role="requirement", id="structural.comparison.equality"]
+.Structural Equality
+--
+If two data instances serialize to the same Git tree, they MUST be considered equal for purposes of data retention.
+--

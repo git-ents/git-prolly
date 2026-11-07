@@ -1,0 +1,34 @@
+[package]
+name = "git-database"
+version = "0.1.0"
+edition = "2024"
+readme = "README.adoc"
+
+[[bin]]
+name = "git-prolly"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:anyhow", "dep:clap", "dep:facet-json"]
+
+[dependencies]
+anyhow = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+facet-json = { workspace = true, optional = true }
+facet-value = { workspace = true }
+git-prolly = { workspace = true }
+gix = { workspace = true, features = [
+    "sha1",
+    "sha256",
+    "zlib-rs",
+    "revision",
+] }
+gix-refstore = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+facet-value = { workspace = true }
+tempfile = { workspace = true }
+test-support = { workspace = true }
