@@ -1,200 +1,74 @@
-= 🫙 `git-store`
+= 🪵 `git-prolly`
 :author: Joey Carpinelli
 :email: joseph.carpinelli@icloud.com
-:description: Self-contained typed documents stored as Git trees, thanks to `facet.rs` reflection in Rust.
+:description: Prolly trees and a versioned database on ordinary Git objects.
 
-Store self-contained structured documents in Git with versioned schemas and
-ordinary Git history. Every document carries the exact `{schema, value}` pair
-used to encode it, so older values remain readable after a schema evolves and
-ordinary reads do not depend on a current schema ref.
+Persistent, content-addressed https://en.wikipedia.org/wiki/Prolly_tree[Prolly trees]
+whose physical representation is ordinary Git objects, and the versioned,
+Dolt-like database built on top of them.
+
+A Prolly node *is* a Git tree, a node identity *is* the Git object id, and a
+value's identity is the root object id of its
+https://github.com/git-ents/facet-git-tree[`facet-git-tree`] representation.
+There is no second object store and no second Merkle-node format, so
+reachability, deduplication, packing, fetching, garbage collection, and
+`git fsck` all apply to the structure for free.
+
+== Crates
+
+* link:crates/git-prolly[`git-prolly`] — an ordered, content-addressed map whose
+  nodes are Git trees: insert, remove, lookup, iteration, structural diff, and
+  verification.
+* link:crates/git-database[`git-database`] — a versioned database with a
+  Dolt-like working state, commit, branch, diff, and merge surface, composed
+  from `git-prolly` and compare-and-swap ref edits. A snapshot is a canonical
+  Git tree; a database commit is an ordinary Git commit.
+
+Compare-and-swap ref storage is consumed from
+https://github.com/git-ents/git-store[`git-store`] as `gix-refstore`, over a git
+dependency.
 
 == Install
 
 [source,console]
 ----
-cargo install --path crates/git-store
+cargo install --path crates/git-database
 ----
+
+This builds the `git-prolly` binary, which exposes the database's Dolt-shaped
+`db` command surface.
 
 == Usage
 
 [source,console]
 ----
-git store schema put recipe -F <schema.json>
-git store put recipe carbonara -F <value.json>
-git store get recipe carbonara
-git store compile recipe <value.json>
-git store value encode --schema refs/schema/recipe -F <value.json>
-git store value decode <value-tree> --schema <schema-tree-or-commit>
-git store document bind <value-tree> --schema <schema-tree-or-commit>
-git store document inspect <document-tree>
-git store document publish recipe <document-tree> --expected absent --alias <name>
-git store cat <document-tree>
+git-prolly db init
+git-prolly db table create users
+git-prolly db put users alice '{"name":"Alice","role":"admin"}'
+git-prolly db get users alice
+git-prolly db status
+git-prolly db diff
+git-prolly db add users
+git-prolly db commit -m 'seed users'
+git-prolly db log
 ----
 
-`git store put <kind> <name> [<value>]` is the everyday write: it encodes,
-binds, and publishes in one step, advancing that name's ref.
-`git store compile <kind> [<value>]` is the pure form of the same composition:
-it creates a bound document whose root contains exactly `schema/` and `value/`,
-then prints the document-tree OID without advancing a ref. The explicit `value`
-and `document` commands expose the individual steps for scripts. `value encode` and
-`value decode` always take an explicit schema tree or schema publication commit;
-`document bind` does too. They do not infer a schema from a kind ref, commit
-trailer, or caller-selected name.
-
-The `schema/` tree is the exact schema used to validate `value/`, so
-`git store cat` can decode the document from its own tree even when no
-`refs/schema/*` ref is available. A published schema ref is a discovery,
-history, or authoring index; it does not define the type of an existing
-document.
-
-The printed hash is the OID of that complete bound `{schema, value}` root tree.
-It is the document's `EntityId`: it is not the publication commit OID and is
-not a caller-provided name. Schema and value both contribute to the ID.
-Canonical entity refs use that ID as the final segment:
-`refs/store/<kind>/<entity-id>`. A caller-selected name is only a compatibility
-alias, and aliases are not the source of truth for identity or the canonical
-entity index.
-
-`schema show <kind>` prints a kind's field layout as text and its full schema
-record as JSON, reporting the publication commit OID and schema-tree OID
-alongside it; omit `<kind>` to show every kind. `--at <commit>` addresses a
-historical publication instead of the current one, and never substitutes the
-current schema for it. `schema log <kind>` traces a kind's schema evolution,
-newest first.
-
-The plumbing inspection surface is deliberately Git-shaped:
-`ref list [--prefix <full-prefix>] [--kind <kind>]`, `ref resolve <full-ref>`,
-`object inspect <object-ish>`, and `object tree <tree-ish>`. These expose full
-refs and stable object IDs rather than abbreviated, display-only names.
-
-For additive plumbing commands, `--format text|json|ndjson` selects output;
-`--json` is compact JSON. JSON records contain stable OIDs and full refs, and
-NDJSON emits one record per item for list-like results. Success is on stdout;
-diagnostics are on stderr. Current exit categories are `1` for other
-operational errors, `2` for invalid arguments/object shape, `3` for missing
-refs/objects/schemas/entities, `4` for CAS conflicts, and `5` for
-schema/value/document failures.
-
-`document publish` requires `--expected absent` or `--expected <full-oid>`. The
-expectation applies to the canonical ref unless `--alias` is supplied, in which
-case it applies to that alias. The canonical ref, alias, and materialized index
-advance in one CAS batch. A stale expectation fails without retry; objects
-written before a lost CAS may remain unreachable. Scripts own retry, resume,
-and conflict policy.
-
-`cat <tree-ish>` resolves a tree-ish and decodes the bound document directly:
-content-addressed, like `git cat-file`, needing neither a name nor a schema
-ref. `get <kind> <name>` resolves a name first, and accepts Git revision
-suffixes on it (`carbonara~1`, `carbonara@{yesterday}`, `carbonara@<oid>`); it
-also reports the publication commit, so a caller holds the compare-and-swap
-token for the value it just read. The `rm <kind> <name>` command publishes a
-typed tombstone over the canonical ref and any alias that points at that
-publication; it does not hard-delete the refs. `get` reports a tombstoned entity as deleted and a missing ref as absent,
-while repeated `rm` reports `already deleted` and `rm` of an absent ref fails.
-
-New commits do not write `Schema:`, `Schema-Version:`, or `Ents-Ref:` trailers,
-and new messages containing lines beginning with those reserved legacy trailer
-names are rejected. Readers ignore those trailers when they occur on older Git
-objects, including malformed or conflicting values, and never use them to
-select a schema. A named write returns a publication commit OID while
-maintaining the canonical ID/ref underneath.
-
-== Entity state and compatibility
-
-The library's `EntityState` distinguishes `Present`, `Absent`, and `Deleted`.
-`Absent` means no canonical/alias ref exists, including an old hard-deleted
-ref. `Deleted` means a ref still exists and points to a typed tombstone whose
-value carries an explicit `Deleted` state, kind, and original `EntityId`.
-Tombstones use the same bound `{schema, value}` frame as ordinary documents, so
-they remain readable after the entity ref is fetched without the schema ref or
-materialized index. `read` returns that state; project it with `value()` when
-`Absent` and `Deleted` may both collapse to `None`, and match on
-`EntityState` when the distinction matters.
-
-Writing the same bound content after deletion restores the original canonical
-entity: a normal value commit is appended after the tombstone, and aliases that
-were pointing at that tombstone are restored atomically. Writing different
-content creates a new `EntityId`; the old ID remains deleted. There is no CLI
-restore command—recreation/restoration is performed through the library write
-APIs.
-
-`Kind::read` takes an `At` address — a name, an `EntityId`, a commit, or a
-bound tree — so the content-derived identity and the caller-chosen name reach
-the same reads. Prefer `put_entity`, `put_with_alias`, `compile_entity`, and
-`entity_reference` when the content-derived identity is part of the
-contract. `refs/schema/<publication>` remains a
-schema publication/history ref, not the type definition of an existing
-document. `entity delete <kind> <entity-id>` publishes a typed tombstone and
-keeps the canonical ref; it does not hard-delete or prune the entity.
-
-Schema-bound values can be encoded, bound, and published as separate steps
-when callers need explicit control over document construction or atomic
-compare-and-swap batches.
-
-== Compatibility limitations
-
-A schema document is a plain `facet-git-tree` schema. A schema object whose
-shape this build does not speak cannot be repaired by inferring anything from
-`refs/schema/<publication>`; republish it under the current format before
-writing new self-contained data against it. Reads always use the schema
-embedded in each document; publication history is available for inspection,
-not value conversion.
-
-== Crates
-
-* link:crates/facet-git-tree[`facet-git-tree`] — Git tree encoding for Facet types.
-* link:crates/gix-refstore[`gix-refstore`] — compare-and-swap storage for Git refs.
-* link:crates/git-store[`git-store`] — schema-aware storage and its command-line interface.
-* link:crates/git-database[`git-database`] — a versioned database over ordinary Git objects.
+link:examples/README.md[`examples/git-db.sh`] runs the same walkthrough against a
+temporary repository; link:benchmarks/README.md[`benchmarks/`] compares the `db`
+surface with Dolt.
 
 == Documentation
 
-* link:docs/specification.adoc[`docs/specification.adoc`] — tree serialization and deserialization.
+* link:crates/git-prolly/README.adoc[`git-prolly`] — the defining invariant,
+  representation, determinism, and module layout.
+* link:crates/git-database/README.adoc[`git-database`] — the snapshot format,
+  the workspace model, and merge semantics.
+* link:docs/git-prolly-development-plan.adoc[`docs/git-prolly-development-plan.adoc`]
+  — the plan for the database layer above `git-prolly`.
+* link:CONCEPTS.adoc[`CONCEPTS.adoc`] — the concept inventory behind the
+  repository and ref vocabulary.
+
+== Contributing
+
 * link:CONTRIBUTING.adoc[`CONTRIBUTING.adoc`] — contribution guide.
 * link:CONDUCT.adoc[`CONDUCT.adoc`] — code of conduct.
-
-== Motivation
-
-// Storing documents which relate to code alongside code is desirable.
-
-== History of Metadata in Git
-
-// Discuss chronologically...
-//
-// . `git-notes`
-// . `git-metadata`
-// . `git-bug`
-// . `git-appraise`
-// . `git-branchless`
-// . `radicle`
-// . Gerrit
-//
-// Or, alternatively, categorize the above projects...
-//
-// . Fan-out Indices as Refs
-// . JSON-like storage in Blobs
-// . Project Maintenance via Remote Helpers
-
-== Review of Data Storage
-
-// Chapter of Designing Data Intensive Applications, including...
-//
-// . Storage
-// . Queries
-// . Wire Format
-//
-// Also, include a kind of chronology from the textbook.
-// When building a database solution, you want the following properties...
-//
-// . Schema Evolution
-// . Stable Wire Format
-// . Support for Multiple Programming Languages
-
-== Typed Documents via Reflection
-
-// Present the following pieces...
-//
-// . Reflection in Rust
-// . Dynamic Encodings in Rust
-// . Stable Codec
-// . Schema Evolution as Commit Merges

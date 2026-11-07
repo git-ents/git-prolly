@@ -7,16 +7,16 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
-if [[ -n "${GIT_STORE_BIN:-}" ]]; then
-  git_store_bin=$GIT_STORE_BIN
-elif command -v git-store >/dev/null 2>&1; then
-  git_store_bin=$(command -v git-store)
-elif [[ -x "$repo_root/target/release/git-store" ]]; then
-  git_store_bin=$repo_root/target/release/git-store
-elif [[ -x "$repo_root/target/debug/git-store" ]]; then
-  git_store_bin=$repo_root/target/debug/git-store
+if [[ -n "${GIT_PROLLY_BIN:-}" ]]; then
+  git_prolly_bin=$GIT_PROLLY_BIN
+elif command -v git-prolly >/dev/null 2>&1; then
+  git_prolly_bin=$(command -v git-prolly)
+elif [[ -x "$repo_root/target/release/git-prolly" ]]; then
+  git_prolly_bin=$repo_root/target/release/git-prolly
+elif [[ -x "$repo_root/target/debug/git-prolly" ]]; then
+  git_prolly_bin=$repo_root/target/debug/git-prolly
 else
-  printf 'git-store was not found; install it or set GIT_STORE_BIN\n' >&2
+  printf 'git-prolly was not found; install it or set GIT_PROLLY_BIN\n' >&2
   exit 1
 fi
 
@@ -59,7 +59,7 @@ if [[ -n "${RUNS:-}" ]]; then
   hyperfine_base+=(--runs "$RUNS")
 fi
 
-root=$(mktemp -d "${TMPDIR:-/tmp}/git-store-dolt-bench.XXXXXX")
+root=$(mktemp -d "${TMPDIR:-/tmp}/git-prolly-dolt-bench.XXXXXX")
 trap 'rm -rf "$root"' EXIT HUP INT TERM
 
 # printf %q gives hyperfine's shell the same path/value boundaries that this
@@ -68,7 +68,7 @@ quote() {
   printf '%q' "$1"
 }
 
-git_q=$(quote "$git_store_bin")
+git_q=$(quote "$git_prolly_bin")
 dolt_q=$(quote "$dolt_bin")
 
 key_for_row() {
@@ -81,7 +81,7 @@ key_for_row() {
 
 seed_git() {
   local file=$1
-  "$git_store_bin" db table create users >/dev/null
+  "$git_prolly_bin" db table create users >/dev/null
   printf '{' >"$file"
   local i key role separator=''
   for ((i = 1; i <= rows; i++)); do
@@ -92,7 +92,7 @@ seed_git() {
     separator=,
   done
   printf '}\n' >>"$file"
-  "$git_store_bin" db table import users -F "$file" >/dev/null
+  "$git_prolly_bin" db table import users -F "$file" >/dev/null
   rm -f "$file"
 }
 
@@ -121,7 +121,7 @@ init_git_repo() {
     git init -q -b main && \
     git config user.name 'Benchmark User' && \
     git config user.email benchmark@example.com && \
-    "$git_store_bin" db init >/dev/null)
+    "$git_prolly_bin" db init >/dev/null)
 }
 
 init_dolt_repo() {
@@ -137,7 +137,7 @@ make_git_fixture() {
   init_git_repo "$dir"
   case "$state" in
     empty) ;;
-    table) (cd "$dir" && "$git_store_bin" db table create users >/dev/null) ;;
+    table) (cd "$dir" && "$git_prolly_bin" db table create users >/dev/null) ;;
     rows|dirty|staged|committed)
       (cd "$dir" && seed_git users-seed.json)
       ;;
@@ -145,17 +145,17 @@ make_git_fixture() {
   esac
   case "$state" in
     dirty|staged|committed)
-      (cd "$dir" && "$git_store_bin" db put users alice \
+      (cd "$dir" && "$git_prolly_bin" db put users alice \
         '{"name":"Alice","role":"owner"}' >/dev/null)
       ;;
   esac
   case "$state" in
     staged|committed)
-      (cd "$dir" && "$git_store_bin" db add users >/dev/null)
+      (cd "$dir" && "$git_prolly_bin" db add users >/dev/null)
       ;;
   esac
   if [[ "$state" == committed ]]; then
-    (cd "$dir" && "$git_store_bin" db commit -m 'seed users' >/dev/null)
+    (cd "$dir" && "$git_prolly_bin" db commit -m 'seed users' >/dev/null)
   fi
 }
 
@@ -211,7 +211,7 @@ bench_fixture() {
   printf '\n== %s (ROWS=%s) ==\n' "$name" "$rows"
   hyperfine "${hyperfine_base[@]}" \
     --prepare "$(prepare_fixture "$state")" \
-    --command-name 'git-store' "$git_command" \
+    --command-name 'git-prolly' "$git_command" \
     --command-name 'dolt' "$dolt_command"
 }
 
@@ -231,7 +231,7 @@ init_dolt="cd $(quote "$dolt_run") && PAGER=cat DOLT_PAGER=cat $dolt_q init --na
 if benchmark_enabled initialize; then
   printf '\n== initialize (ROWS=%s) ==\n' "$rows"
   hyperfine "${hyperfine_base[@]}" --prepare "$init_prepare" \
-    --command-name 'git-store' "$init_git" \
+    --command-name 'git-prolly' "$init_git" \
     --command-name 'dolt' "$init_dolt"
 fi
 

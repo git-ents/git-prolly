@@ -2143,7 +2143,6 @@ dependencies = [
 [[package]]
 name = "test-support"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-store#f3566f4ed799ae1b694808a8bf31e4186dd9f4f3"
 dependencies = [
  "gix",
 ]

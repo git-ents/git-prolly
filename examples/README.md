@@ -16,24 +16,23 @@ directory to keep the repository for inspection:
 ./examples/dolt-db.sh /tmp/dolt-db-example
 ```
 
-The Git script invokes the repository's external subcommand as `git store db`.
-It uses `GIT_PAGER=cat`, `PAGER=cat`, and `git --no-pager` so Git never opens a
-pager. It expects `git-store` to be available as `git-store` on `PATH` (Git's
-external-subcommand lookup supplies that command in a normal installation).
+The Git script invokes the `git-prolly` binary as `git-prolly db`. It sets
+`GIT_PAGER=cat` and `PAGER=cat` so Git never opens a pager. It expects
+`git-prolly` to be available on `PATH`.
 The Dolt script expects `dolt` on `PATH` and sets `PAGER=cat`.
 
 ## Operation mapping
 
 | Task                      | Git database CLI                  | Dolt CLI                                      |
 | ------------------------- | --------------------------------- | --------------------------------------------- |
-| Initialize                | `git store db init`               | `dolt init`                                   |
-| Create a table            | `git store db table create users` | `CREATE TABLE users (...)` via `dolt sql`     |
-| Insert/update/delete rows | `git store db put` / `rm`         | `INSERT` / `UPDATE` / `DELETE` via `dolt sql` |
-| Read rows                 | `git store db get`                | `SELECT` via `dolt sql`                       |
-| Inspect changes           | `git store db status`, `diff`     | `dolt status`, `diff`                         |
-| Stage                     | `git store db add users`          | `dolt add users`                              |
-| Commit                    | `git store db commit -m ...`      | `dolt commit -m ...`                          |
-| History                   | `git store db log`                | `dolt log`                                    |
+| Initialize                | `git-prolly db init`               | `dolt init`                                   |
+| Create a table            | `git-prolly db table create users` | `CREATE TABLE users (...)` via `dolt sql`     |
+| Insert/update/delete rows | `git-prolly db put` / `rm`         | `INSERT` / `UPDATE` / `DELETE` via `dolt sql` |
+| Read rows                 | `git-prolly db get`                | `SELECT` via `dolt sql`                       |
+| Inspect changes           | `git-prolly db status`, `diff`     | `dolt status`, `diff`                         |
+| Stage                     | `git-prolly db add users`          | `dolt add users`                              |
+| Commit                    | `git-prolly db commit -m ...`      | `dolt commit -m ...`                          |
+| History                   | `git-prolly db log`                | `dolt log`                                    |
 | Export/import             | `db table export/import`          | `table export/import`                         |
 
 The database CLI intentionally has a Dolt-shaped porcelain, but it is a

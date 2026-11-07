@@ -1,7 +1,7 @@
 # Git database vs. Dolt benchmarks
 
 `db.sh` uses [hyperfine](https://github.com/sharkdp/hyperfine) to compare the
-Dolt-shaped `git store db` CLI with equivalent Dolt SQL/porcelain commands.
+Dolt-shaped `git-prolly db` CLI with equivalent Dolt SQL/porcelain commands.
 The benchmark measures process-level CLI latency, including repository/database
 open, command parsing, storage work, and output generation. It does **not**
 measure the one-time fixture setup: each sample starts from a freshly copied
@@ -12,15 +12,15 @@ fixture via hyperfine's `--prepare` hook.
 Build the optimized binary and run the benchmark:
 
 ```sh
-cargo build --release -p git-store
+cargo build --release -p git-database
 ./benchmarks/db.sh
 ```
 
-The script finds `git-store`, `dolt`, and `hyperfine` on `PATH`. Override paths
+The script finds `git-prolly`, `dolt`, and `hyperfine` on `PATH`. Override paths
 when needed:
 
 ```sh
-GIT_STORE_BIN="$PWD/target/release/git-store" DOLT_BIN="$HOME/bin/dolt" \
+GIT_PROLLY_BIN="$PWD/target/release/git-prolly" DOLT_BIN="$HOME/bin/dolt" \
   ./benchmarks/db.sh
 ```
 
@@ -44,7 +44,7 @@ every size:
 
 ```sh
 ROWS_LIST='2 100 1000 5000' WARMUP=1 RUNS=5 \
-  GIT_STORE_BIN="$PWD/target/release/git-store" ./benchmarks/scale.sh
+  GIT_PROLLY_BIN="$PWD/target/release/git-prolly" ./benchmarks/scale.sh
 ```
 
 Set `BENCHMARKS` to a comma-separated operation list to sweep other operations,
@@ -65,7 +65,7 @@ The benchmark covers equivalent operations from the examples:
 
 | Operation                     | Git database                           | Dolt                                    |
 | ----------------------------- | -------------------------------------- | --------------------------------------- |
-| initialize                    | `git store db init` (after `git init`) | `dolt init`                             |
+| initialize                    | `git-prolly db init` (after `git init`) | `dolt init`                             |
 | create table                  | `db table create users`                | `CREATE TABLE users (...)`              |
 | insert/read/update/delete row | `db put/get/rm`                        | SQL `INSERT`/`SELECT`/`UPDATE`/`DELETE` |
 | inspect unstaged work         | `db status`, `db diff`                 | `dolt status`, `dolt diff`              |
@@ -86,12 +86,12 @@ A reference run on September 6, 2026 used the optimized binary and the
 following command:
 
 ```sh
-cargo build --release -p git-store
+cargo build --release -p git-database
 ROWS=2 WARMUP=1 RUNS=5 \
-  GIT_STORE_BIN="$PWD/target/release/git-store" ./benchmarks/db.sh
+  GIT_PROLLY_BIN="$PWD/target/release/git-prolly" ./benchmarks/db.sh
 ```
 
-Environment: macOS on Apple Silicon, Git 2.55.0, `git-store` 0.1.0,
+Environment: macOS on Apple Silicon, Git 2.55.0, `git-prolly` 0.1.0,
 Dolt 2.3.2, and hyperfine 1.20.0. The fixture contained two rows. Times below
 are hyperfine means across five runs; they include process startup and command
 output, but not fixture setup.
@@ -122,7 +122,7 @@ the Prolly path from the row's leaf to the root, a targeted sweep used:
 
 ```sh
 ROWS_LIST='2 100 1000 5000' BENCHMARKS='update-row,export' \
-  WARMUP=1 RUNS=3 GIT_STORE_BIN="$PWD/target/release/git-store" \
+  WARMUP=1 RUNS=3 GIT_PROLLY_BIN="$PWD/target/release/git-prolly" \
   ./benchmarks/scale.sh
 ```
 
